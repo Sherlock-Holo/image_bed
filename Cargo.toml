@@ -1,0 +1,27 @@
+[package]
+name = "image_bed"
+version = "0.1.0"
+authors = ["Sherlock Holo <sherlockya@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+rusoto_s3 = { version = "0.45", features = ["rustls"], default-features = false }
+tokio = { version = "0.2", features = ["macros", "rt-threaded"] }
+hyper = { version = "0.13", features = ["stream"] }
+futures-util = "0.3"
+anyhow = "1.0"
+hex = "0.4"
+md-5 = "0.9"
+async-trait = "0.1"
+bytes = "0.5"
+rusoto_core = { version = "0.45", default-features = false }
+thiserror = "1.0"
+
+[dependencies.sqlx]
+version = "0.4"
+features = ["runtime-tokio-rustls", "postgres"]
+
+[dev-dependencies]
+rand = "0.8"
