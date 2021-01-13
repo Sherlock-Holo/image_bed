@@ -11,7 +11,7 @@ use hyper::{Body, Request, Response, StatusCode, Uri};
 use hyper::service::Service;
 use log::{info, warn};
 use sha2::{Digest, Sha256};
-use sqlx::postgres::PgPoolOptions;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 
 use crate::db::Database;
 use crate::http::ServiceResult;
@@ -23,28 +23,131 @@ type BoxError = Box<dyn Error + Send + Sync>;
 
 const UPLOAD_PATH: &str = "/upload";
 const GET_PATH: &str = "/get";
+const DEFAULT_MAX_BODY_SIZE: u64 = 20 * 1024 * 1024;
 
 #[derive(Debug)]
-pub struct Handler<S: StoreBackend> {
-    store_backend: Arc<S>,
-    id_generator: Generator,
-    db: Database,
-    domain: Arc<String>,
-    max_body_size: u64,
+pub struct HandlerBuilder<'a, S: StoreBackend> {
+    domain: Option<&'a str>,
+    database_name: Option<&'a str>,
+    host: Option<&'a str>,
+    user: Option<&'a str>,
+    password: Option<&'a str>,
+    port: Option<u16>,
+    store_backend: Option<S>,
+    max_body_size: Option<u64>,
 }
 
-impl<S: StoreBackend> Handler<S> {
-    pub async fn new(
-        domain: &str,
-        db_uri: &str,
-        store_backend: S,
-        max_body_size: impl Into<u64>,
-    ) -> anyhow::Result<Self> {
+impl<'a, S: StoreBackend> Default for HandlerBuilder<'a, S> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<'a, S: StoreBackend> HandlerBuilder<'a, S> {
+    pub fn new() -> Self {
+        Self {
+            domain: None,
+            database_name: None,
+            host: None,
+            user: None,
+            password: None,
+            port: None,
+            store_backend: None,
+            max_body_size: None,
+        }
+    }
+
+    pub fn set_domain(&mut self, domain: &'a str) -> &mut Self {
+        self.domain.replace(domain);
+
+        self
+    }
+
+    pub fn set_database_name(&mut self, database_name: &'a str) -> &mut Self {
+        self.database_name.replace(database_name);
+
+        self
+    }
+
+    pub fn set_host(&mut self, host: &'a str) -> &mut Self {
+        self.host.replace(host);
+
+        self
+    }
+
+    pub fn set_user(&mut self, user: &'a str) -> &mut Self {
+        self.user.replace(user);
+
+        self
+    }
+
+    pub fn set_password(&mut self, password: &'a str) -> &mut Self {
+        self.password.replace(password);
+
+        self
+    }
+
+    pub fn set_port(&mut self, port: u16) -> &mut Self {
+        self.port.replace(port);
+
+        self
+    }
+
+    pub fn set_store_backend(&mut self, store_backend: S) -> &mut Self {
+        self.store_backend.replace(store_backend);
+
+        self
+    }
+
+    pub fn set_max_body_size(&mut self, max_body_size: u64) -> &mut Self {
+        self.max_body_size.replace(max_body_size);
+
+        self
+    }
+
+    pub async fn build(mut self) -> anyhow::Result<Handler<S>> {
+        let domain = match self.domain.take() {
+            None => return Err(anyhow::anyhow!("domain is not set")),
+            Some(domain) => domain,
+        };
+
+        let database_name = match self.database_name.take() {
+            None => return Err(anyhow::anyhow!("database_name is not set")),
+            Some(database_name) => database_name,
+        };
+
+        let host = match self.host.take() {
+            None => return Err(anyhow::anyhow!("host is not set")),
+            Some(host) => host,
+        };
+
+        let user = match self.user.take() {
+            None => return Err(anyhow::anyhow!("user is not set")),
+            Some(user) => user,
+        };
+
+        let password = match self.password.take() {
+            None => return Err(anyhow::anyhow!("password is not set")),
+            Some(password) => password,
+        };
+
+        let store_backend = match self.store_backend.take() {
+            None => return Err(anyhow::anyhow!("store_backend is not set")),
+            Some(store_backend) => store_backend,
+        };
+
         const ID_TYPE: &str = "image_bed";
+
+        let connect_options = PgConnectOptions::new()
+            .database(database_name)
+            .host(host)
+            .username(user)
+            .password(password)
+            .port(self.port.unwrap_or(5432));
 
         let db_pool = PgPoolOptions::new()
             .max_connections(20)
-            .connect(db_uri)
+            .connect_with(connect_options)
             .await?;
 
         info!("db pool is connected");
@@ -57,14 +160,23 @@ impl<S: StoreBackend> Handler<S> {
 
         info!("db is init");
 
-        Ok(Self {
+        Ok(Handler {
             store_backend: Arc::new(store_backend),
             id_generator,
             db,
             domain: Arc::new(domain.to_owned()),
-            max_body_size: max_body_size.into(),
+            max_body_size: self.max_body_size.unwrap_or(DEFAULT_MAX_BODY_SIZE),
         })
     }
+}
+
+#[derive(Debug)]
+pub struct Handler<S: StoreBackend> {
+    store_backend: Arc<S>,
+    id_generator: Generator,
+    db: Database,
+    domain: Arc<String>,
+    max_body_size: u64,
 }
 
 impl<T, S> Service<T> for Handler<S>
