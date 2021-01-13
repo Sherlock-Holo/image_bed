@@ -2,10 +2,9 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use futures_util::lock::Mutex;
+use log::error;
 use md5::{Digest, Md5};
 use sqlx::PgPool;
-
-const TABLE_NAME: &str = "id_generate";
 
 #[derive(Debug)]
 struct InnerGenerator {
@@ -22,7 +21,7 @@ pub struct Generator {
 
 impl Generator {
     pub async fn new(db: &PgPool, id_type: &str) -> anyhow::Result<Self> {
-        sqlx::query(&format!("select from {} where id_type = $1", TABLE_NAME))
+        sqlx::query("select from id_generate where id_type = $1")
             .bind(id_type)
             .execute(db)
             .await?;
@@ -46,14 +45,17 @@ impl Generator {
             return Ok(id);
         }
 
-        let (max_id, ) = sqlx::query_as::<_, (i64, )>(&format!(
-            "update {} set id_value=id_value+$1 where id_type=$2 returning id_value",
-            TABLE_NAME
-        ))
+        let (max_id, ) = sqlx::query_as::<_, (i64, )>(
+            "update id_generate set id_value=id_value+$1 where id_type=$2 returning id_value",
+        )
             .bind(inner.step as i32)
             .bind(&inner.id_type)
             .fetch_one(&inner.db_pool)
-            .await?;
+            .await
+            .map_err(|err| {
+                error!("get id value failed: {:?}", err);
+                err
+            })?;
 
         let start_id: i64 = max_id - (inner.step as i64) - 1;
 
