@@ -1,4 +1,4 @@
-use std::fmt::{Debug, Display};
+use std::error::Error;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -8,7 +8,7 @@ pub mod cos;
 
 #[async_trait]
 pub trait StoreBackend {
-    type Error: Debug + Display;
+    type Error: Error;
 
     async fn put<R: AsyncRead + Send>(
         &self,

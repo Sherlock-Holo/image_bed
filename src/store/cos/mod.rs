@@ -6,6 +6,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 use futures_util::{AsyncReadExt, StreamExt};
 use futures_util::io::AsyncRead;
 use hyper::StatusCode;
+use log::error;
 use rusoto_core::{ByteStream, HttpClient, Region, RusotoError};
 use rusoto_core::credential::StaticProvider;
 use rusoto_s3::{
@@ -35,13 +36,13 @@ pub enum Error {
     IoError(#[from] io::Error),
 
     #[error("cos error: {0:?}")]
-    CosError(Box<dyn Debug>),
+    CosError(Box<dyn Debug + Send + Sync>),
 
     #[error("bucket {0} is not empty")]
     BucketNotEmpty(String),
 }
 
-impl<E: 'static + std::error::Error> From<RusotoError<E>> for Error {
+impl<E: 'static + std::error::Error + Send + Sync> From<RusotoError<E>> for Error {
     fn from(err: RusotoError<E>) -> Self {
         Error::CosError(Box::new(err))
     }
@@ -373,6 +374,8 @@ impl CosBackend {
                         return Ok(false);
                     }
 
+                    error!("check bucket {} exist failed: {:?}", bucket, err);
+
                     Err(err.into())
                 }
 
@@ -406,6 +409,11 @@ impl CosBackend {
             if is_service_err_or_not_found(&err) {
                 Ok(false)
             } else {
+                error!(
+                    "check bucket {} resource {} exist failed: {:?}",
+                    bucket, resource_id, err
+                );
+
                 Err(err.into())
             }
         } else {
@@ -424,6 +432,8 @@ impl CosBackend {
             if is_service_err_or_not_found(&err) {
                 Ok(())
             } else {
+                error!("delete bucket {} failed: {:?}", bucket, err);
+
                 Err(err.into())
             }
         } else {
@@ -461,6 +471,23 @@ mod tests {
 
         let data = cos_backend
             .get("test-bucket", "test-resource-id", None, None)
+            .await
+            .unwrap();
+
+        println!("data is {}", String::from_utf8_lossy(&data));
+    }
+
+    #[tokio::test]
+    async fn test_get_exist_resource_from_1() {
+        let access_key = env::var("COS_ACCESS_KEY").expect("need set COS_ACCESS_KEY env");
+        let secret_key = env::var("COS_SECRET_KEY").expect("need set COS_SECRET_KEY env");
+        let region = env::var("COS_REGION").expect("need set COS_REGION env");
+        let app_id = env::var("COS_APP_ID").expect("need set COS_APP_ID env");
+
+        let cos_backend = CosBackend::new(&access_key, &secret_key, &region, &app_id);
+
+        let data = cos_backend
+            .get("test-bucket", "test-resource-id", 1, None)
             .await
             .unwrap();
 
