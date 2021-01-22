@@ -61,7 +61,7 @@ impl<S> Service<Request<Body>> for SizeLimitService<S>
 
             *req.body_mut() = Body::from(buf.freeze());
 
-            Ok(inner_service.call(req).await.map_err(|err| err.into())?)
+            inner_service.call(req).await.map_err(|err| err.into())
         })
     }
 }

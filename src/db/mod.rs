@@ -11,6 +11,7 @@ pub struct Resource {
     id: String,
     bucket: String,
     create_time: i64,
+    resource_size: i64,
 }
 
 impl Resource {
@@ -24,6 +25,10 @@ impl Resource {
 
     pub fn get_create_time(&self) -> SystemTime {
         SystemTime::UNIX_EPOCH + Duration::from_secs(self.create_time as _)
+    }
+
+    pub fn get_resource_size(&self) -> u64 {
+        self.resource_size as _
     }
 }
 
@@ -48,17 +53,19 @@ impl Database {
         bucket: &str,
         resource_id: &str,
         resource_hash: &str,
+        resource_size: u64,
     ) -> Result<Resource> {
         let now = SystemTime::now();
         let unix_timestamp = now.duration_since(SystemTime::UNIX_EPOCH)?.as_secs();
 
         sqlx::query(
-            "insert into resources (id, bucket, create_time, hash) values ($1, $2, $3, $4)",
+            "insert into resources (id, bucket, create_time, hash, resource_size) values ($1, $2, $3, $4, $5)",
         )
             .bind(resource_id)
             .bind(bucket)
             .bind(unix_timestamp as i64)
             .bind(resource_hash)
+            .bind(resource_size as i64)
             .execute(&self.db_pool)
             .await?;
 
@@ -66,6 +73,7 @@ impl Database {
             id: resource_id.to_owned(),
             bucket: bucket.to_owned(),
             create_time: unix_timestamp as _,
+            resource_size: resource_size as _,
         })
     }
 

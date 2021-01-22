@@ -292,7 +292,7 @@ impl<S> Handle<S>
 
             let resource = self
                 .db
-                .insert_resource(&bucket, &resource_id, &hash_result)
+                .insert_resource(&bucket, &resource_id, &hash_result, data.len() as _)
                 .await?;
 
             self.store_backend
@@ -379,8 +379,10 @@ impl<S> Handle<S>
             // content-range is [start, end], not [start, end)
             let end = end.unwrap_or_else(|| (data.len() as u64) - start - 1);
 
-            resp_builder =
-                resp_builder.header("content-range", format!("bytes: {}-{}/*", start, end));
+            resp_builder = resp_builder.header(
+                "content-range",
+                format!("bytes: {}-{}/{}", start, end, resource.get_resource_size()),
+            );
         }
 
         Ok(resp_builder.body(Body::from(data))?)
