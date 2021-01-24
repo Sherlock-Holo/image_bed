@@ -1,3 +1,3 @@
 # image_bed
 
-a image bed
+an image bed
