@@ -12,21 +12,18 @@ use crate::http::ServiceResult;
 #[derive(Debug)]
 pub struct SizeLimitService<S> {
     max_size: u64,
-    service: Option<S>,
+    service: S,
 }
 
 impl<S> SizeLimitService<S> {
     pub fn new(max_size: u64, service: S) -> Self {
-        Self {
-            max_size,
-            service: Some(service),
-        }
+        Self { max_size, service }
     }
 }
 
 impl<S> Service<Request<Body>> for SizeLimitService<S>
     where
-        S: Service<Request<Body>, Response=Response<Body>> + Send + 'static,
+        S: Service<Request<Body>, Response=Response<Body>> + Send + Clone + 'static,
         S::Future: Send,
         S::Error: Into<Box<dyn Error + Send + Sync>>,
 {
@@ -39,7 +36,7 @@ impl<S> Service<Request<Body>> for SizeLimitService<S>
     }
 
     fn call(&mut self, mut req: Request<Body>) -> Self::Future {
-        let mut inner_service = self.service.take().unwrap();
+        let mut inner_service = self.service.clone();
         let max_size = self.max_size;
 
         Box::pin(async move {
@@ -63,5 +60,19 @@ impl<S> Service<Request<Body>> for SizeLimitService<S>
 
             inner_service.call(req).await.map_err(|err| err.into())
         })
+    }
+}
+
+impl<S: Clone> Clone for SizeLimitService<S> {
+    fn clone(&self) -> Self {
+        SizeLimitService {
+            max_size: self.max_size,
+            service: self.service.clone(),
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.max_size = source.max_size;
+        self.service = source.service.clone()
     }
 }
