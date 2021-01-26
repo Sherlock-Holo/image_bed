@@ -84,7 +84,7 @@ COMMENT ON COLUMN public.resources.hash IS 'resource hash';
 --
 
 COPY public.id_generate (id_type, id_value) FROM stdin;
-image_resource_id	3
+image_bed	3
 test_id	21
 \.
 
