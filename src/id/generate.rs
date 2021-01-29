@@ -57,7 +57,7 @@ impl Generator {
                 err
             })?;
 
-        let start_id: i64 = max_id - (inner.step as i64) - 1;
+        let start_id: i64 = max_id - (inner.step as i64) + 1;
 
         let mut hasher = Md5::new();
 

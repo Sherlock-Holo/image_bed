@@ -245,14 +245,18 @@ impl<S> Service<Request<Body>> for Handle<S>
     fn call(&mut self, req: Request<Body>) -> Self::Future {
         let path = req.uri().path();
 
-        if path.starts_with(UPLOAD_PATH) {
+        if path.starts_with(UPLOAD_PATH) && req.method() == Method::HEAD {
             let handle = self.clone();
 
             Box::pin(async move { handle.handle_upload(req).await })
-        } else if path.starts_with(GET_PATH) {
+        } else if path.starts_with(GET_PATH) && req.method() == Method::GET {
             let handle = self.clone();
 
             Box::pin(async move { handle.handle_get(req).await })
+        } else if path.starts_with(GET_PATH) && req.method() == Method::HEAD {
+            let handle = self.clone();
+
+            Box::pin(async move { handle.handle_head(req).await })
         } else {
             warn!("illegal request {:?}", req);
 
@@ -270,12 +274,6 @@ impl<S> Handle<S>
         S::Error: Send + Sync,
 {
     async fn handle_upload(&self, req: Request<Body>) -> Result<Response<Body>, BoxError> {
-        if req.method() != Method::POST {
-            warn!("reject illegal method {} for upload", req.method());
-
-            return Ok(self.return_bad_request(req).await?);
-        }
-
         let data = body::to_bytes(req.into_body()).await?;
 
         let mut hasher = Sha256::new();
@@ -318,12 +316,6 @@ impl<S> Handle<S>
     }
 
     async fn handle_get(&self, req: Request<Body>) -> Result<Response<Body>, BoxError> {
-        if req.method() != Method::GET {
-            warn!("reject illegal method {} for get", req.method());
-
-            return Ok(self.return_bad_request(req).await?);
-        }
-
         let path = req.uri().path().replace(GET_PATH, "");
         let resource_id = path.strip_prefix('/').unwrap_or(&path);
 
@@ -386,6 +378,98 @@ impl<S> Handle<S>
         }
 
         Ok(resp_builder.body(Body::from(data))?)
+    }
+
+    async fn handle_head(&self, req: Request<Body>) -> Result<Response<Body>, BoxError> {
+        let path = req.uri().path().replace(GET_PATH, "");
+        let resource_id = path.strip_prefix('/').unwrap_or(&path);
+
+        let resource = match self.db.get_resource_by_id(resource_id).await? {
+            None => {
+                return Ok(Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .body(Body::empty())?);
+            }
+
+            Some(resource) => resource,
+        };
+
+        let (start, end) = match req.headers().get("range") {
+            None => (None, None),
+            Some(range) => range.to_str().map_or((None, None), |range| {
+                if !range.starts_with("bytes=") {
+                    (None, None)
+                } else {
+                    let bytes = range.replace("bytes=", "");
+                    let start_end = bytes.split('-').collect::<Vec<_>>();
+
+                    if start_end.len() != 2 {
+                        (None, None)
+                    } else {
+                        let start = start_end[0].parse::<u64>().ok();
+                        let end = start_end[1].parse::<u64>().ok();
+
+                        (start, end)
+                    }
+                }
+            }),
+        };
+
+        let status_code = if start.is_some() || end.is_some() {
+            StatusCode::PARTIAL_CONTENT
+        } else {
+            StatusCode::OK
+        };
+
+        let resource_size = resource.get_resource_size();
+
+        let (start, end, total) = match (start, end) {
+            (Some(start), Some(end)) => {
+                if start <= resource_size && end <= resource_size {
+                    (Some(start), Some(end), end - start + 1)
+                } else if start > resource_size {
+                    (Some(resource_size), Some(resource_size), 0)
+                } else {
+                    (Some(start), Some(resource_size), resource_size - start + 1)
+                }
+            }
+
+            (Some(start), None) => {
+                if start <= resource_size {
+                    (Some(start), None, resource_size - start + 1)
+                } else {
+                    (Some(resource_size), None, 0)
+                }
+            }
+
+            (None, Some(end)) => {
+                if end <= resource_size {
+                    (Some(0), Some(end), end + 1)
+                } else {
+                    (Some(0), Some(resource_size), resource_size)
+                }
+            }
+
+            (None, None) => (None, None, resource_size),
+        };
+
+        let mut resp_builder = Response::builder();
+        resp_builder = resp_builder.header("content-type", "text/plain");
+        resp_builder = resp_builder.header("content-type", "charset=utf-8");
+        resp_builder = resp_builder.status(status_code);
+
+        if status_code == StatusCode::PARTIAL_CONTENT {
+            let start = start.unwrap_or(0);
+            // content-range is [start, end], not [start, end)
+            let end = end.unwrap_or(total);
+
+            resp_builder = resp_builder.header(
+                "content-range",
+                format!("bytes: {}-{}/{}", start, end, total),
+            );
+        }
+
+        Ok(resp_builder.body(Body::empty())?)
     }
 
     async fn return_bad_request(&self, _req: Request<Body>) -> anyhow::Result<Response<Body>> {
