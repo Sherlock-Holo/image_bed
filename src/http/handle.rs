@@ -8,6 +8,7 @@ use std::task::{Context, Poll};
 use chrono::Local;
 use hyper::{body, Method};
 use hyper::{Body, Request, Response, StatusCode, Uri};
+use hyper::http::uri::Authority;
 use hyper::service::Service;
 use log::{info, warn};
 use sha2::{Digest, Sha256};
@@ -274,6 +275,12 @@ impl<S> Handle<S>
         S::Error: Send + Sync,
 {
     async fn handle_upload(&self, req: Request<Body>) -> Result<Response<Body>, BoxError> {
+        let req_authority = req
+            .uri()
+            .authority()
+            .cloned()
+            .unwrap_or_else(|| Authority::from_static(""));
+
         let data = body::to_bytes(req.into_body()).await?;
 
         let mut hasher = Sha256::new();
@@ -302,7 +309,7 @@ impl<S> Handle<S>
 
         let resource_uri = Uri::builder()
             .scheme("https")
-            .authority(self.domain.as_str())
+            .authority(req_authority)
             .path_and_query(format!("{}/{}", GET_PATH, resource.get_id()))
             .build()?
             .to_string();
@@ -463,10 +470,12 @@ impl<S> Handle<S>
             // content-range is [start, end], not [start, end)
             let end = end.unwrap_or(total);
 
-            resp_builder = resp_builder.header(
-                "content-range",
-                format!("bytes: {}-{}/{}", start, end, total),
-            );
+            resp_builder = resp_builder
+                .header(
+                    "content-range",
+                    format!("bytes: {}-{}/{}", start, end, total),
+                )
+                .header("content-length", format!("{}", total));
         }
 
         Ok(resp_builder.body(Body::empty())?)
