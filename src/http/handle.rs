@@ -246,7 +246,7 @@ impl<S> Service<Request<Body>> for Handle<S>
     fn call(&mut self, req: Request<Body>) -> Self::Future {
         let path = req.uri().path();
 
-        if path.starts_with(UPLOAD_PATH) && req.method() == Method::HEAD {
+        if path.starts_with(UPLOAD_PATH) && req.method() == Method::POST {
             let handle = self.clone();
 
             Box::pin(async move { handle.handle_upload(req).await })
