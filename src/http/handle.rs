@@ -8,7 +8,6 @@ use std::task::{Context, Poll};
 use chrono::Local;
 use hyper::{body, Method};
 use hyper::{Body, Request, Response, StatusCode, Uri};
-use hyper::http::uri::Authority;
 use hyper::service::Service;
 use log::{info, warn};
 use sha2::{Digest, Sha256};
@@ -275,11 +274,11 @@ impl<S> Handle<S>
         S::Error: Send + Sync,
 {
     async fn handle_upload(&self, req: Request<Body>) -> Result<Response<Body>, BoxError> {
-        let req_authority = req
-            .uri()
-            .authority()
-            .cloned()
-            .unwrap_or_else(|| Authority::from_static(""));
+        let host = if let Some(host) = req.headers().get("host").cloned() {
+            host.to_str()?.to_owned()
+        } else {
+            self.domain.as_str().to_owned()
+        };
 
         let data = body::to_bytes(req.into_body()).await?;
 
@@ -309,7 +308,7 @@ impl<S> Handle<S>
 
         let resource_uri = Uri::builder()
             .scheme("https")
-            .authority(req_authority)
+            .authority(host.as_str())
             .path_and_query(format!("{}/{}", GET_PATH, resource.get_id()))
             .build()?
             .to_string();
