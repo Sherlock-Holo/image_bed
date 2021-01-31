@@ -331,7 +331,12 @@ impl<S> Handle<S>
         headers.append("content-type", "text/plain".parse()?);
         headers.append("content-type", "charset=utf-8".parse()?);
 
-        info!(log::get_logger(), "upload success"; log_cx, "resource" => format!("{:?}", resource));
+        info!(
+            log::get_logger(),
+            "upload success";
+            log_cx,
+            "resource" => format!("{:?}", resource)
+        );
 
         Ok(resp)
     }
@@ -408,7 +413,14 @@ impl<S> Handle<S>
             );
         }
 
-        info!(log::get_logger(), "get success"; log_cx, "resource" => format!("{:?}", resource), "start" => start, "end" => end);
+        info!(
+            log::get_logger(),
+            "get success";
+            log_cx,
+            "resource" => format!("{:?}", resource),
+            "start" => start,
+            "end" => end
+        );
 
         Ok(resp_builder.body(Body::from(data))?)
     }
@@ -500,24 +512,24 @@ impl<S> Handle<S>
             // content-range is [start, end], not [start, end)
             let end = end.unwrap_or(total);
 
-            resp_builder = resp_builder
-                .header(
-                    "content-range",
-                    format!("bytes: {}-{}/{}", start, end, total),
-                )
-                .header("content-length", format!("{}", total));
+            resp_builder = resp_builder.header(
+                "content-range",
+                format!("bytes: {}-{}/{}", start, end, total),
+            );
         }
 
-        info!(log::get_logger(), "head success"; log_cx, "resource" => format!("{:?}", resource), "start" => start, "end" => end);
+        resp_builder = resp_builder.header("content-length", format!("{}", total));
+
+        info!(
+            log::get_logger(),
+            "head success";
+            log_cx,
+            "resource" => format!("{:?}", resource),
+            "start" => start,
+            "end" => end
+        );
 
         Ok(resp_builder.body(Body::empty())?)
-    }
-
-    async fn return_bad_request(&self, _req: Request<Body>) -> anyhow::Result<Response<Body>> {
-        Response::builder()
-            .status(StatusCode::BAD_REQUEST)
-            .body(Body::empty())
-            .map_err(|err| err.into())
     }
 }
 
