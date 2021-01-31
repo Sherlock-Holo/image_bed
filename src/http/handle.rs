@@ -14,6 +14,7 @@ use sha2::{Digest, Sha256};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 
 use crate::db::Database;
+use crate::http::request_id::RequestIdMiddleware;
 use crate::http::ServiceResult;
 use crate::http::size_limit::SizeLimitService;
 use crate::id::generate::Generator;
@@ -183,7 +184,7 @@ impl<T, S> Service<T> for Handler<S>
     where
         S: StoreBackend + Send + Sync,
 {
-    type Response = SizeLimitService<Handle<S>>;
+    type Response = RequestIdMiddleware<SizeLimitService<Handle<S>>>;
     type Error = Infallible;
     type Future = Ready<Result<Self::Response, Self::Error>>;
 
@@ -195,7 +196,7 @@ impl<T, S> Service<T> for Handler<S>
         let max_body_size = self.max_body_size;
         let handle = Handle::from(self);
 
-        future::ready(Ok(SizeLimitService::new(max_body_size, handle)))
+        future::ready(Ok(SizeLimitService::new(max_body_size, handle).into()))
     }
 }
 
