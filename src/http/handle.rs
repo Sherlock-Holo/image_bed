@@ -14,7 +14,7 @@ use slog::{info, warn};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 
 use crate::db::Database;
-use crate::http::request_id::RequestIdMiddleware;
+use crate::http::request_id::RequestIdService;
 use crate::http::ServiceResult;
 use crate::http::size_limit::SizeLimitService;
 use crate::id::generate::Generator;
@@ -185,7 +185,7 @@ impl<T, S> Service<T> for Handler<S>
     where
         S: StoreBackend + Send + Sync,
 {
-    type Response = RequestIdMiddleware<SizeLimitService<Handle<S>>>;
+    type Response = RequestIdService<SizeLimitService<Handle<S>>>;
     type Error = Infallible;
     type Future = Ready<Result<Self::Response, Self::Error>>;
 

@@ -9,12 +9,12 @@ use rand::{RngCore, SeedableRng};
 use rand::rngs::StdRng;
 
 #[derive(Debug)]
-pub struct RequestIdMiddlewareFuture<F: Future> {
+pub struct RequestIdFuture<F: Future> {
     request_id: String,
     fut: F,
 }
 
-impl<F, E> Future for RequestIdMiddlewareFuture<F>
+impl<F, E> Future for RequestIdFuture<F>
     where
         F: Future<Output=Result<Response<Body>, E>> + Unpin,
 {
@@ -34,30 +34,30 @@ impl<F, E> Future for RequestIdMiddlewareFuture<F>
 }
 
 #[derive(Debug)]
-pub struct RequestIdMiddleware<S> {
+pub struct RequestIdService<S> {
     service: S,
 }
 
-impl<S> RequestIdMiddleware<S> {
+impl<S> RequestIdService<S> {
     pub fn new(service: S) -> Self {
         Self { service }
     }
 }
 
-impl<S> From<S> for RequestIdMiddleware<S> {
+impl<S> From<S> for RequestIdService<S> {
     fn from(service: S) -> Self {
         Self { service }
     }
 }
 
-impl<S> Service<Request<Body>> for RequestIdMiddleware<S>
+impl<S> Service<Request<Body>> for RequestIdService<S>
     where
         S: Service<Request<Body>, Response=Response<Body>>,
         S::Future: Unpin,
 {
     type Response = S::Response;
     type Error = S::Error;
-    type Future = RequestIdMiddlewareFuture<S::Future>;
+    type Future = RequestIdFuture<S::Future>;
 
     fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
@@ -78,6 +78,6 @@ impl<S> Service<Request<Body>> for RequestIdMiddleware<S>
 
         let fut = self.service.call(req);
 
-        RequestIdMiddlewareFuture { request_id, fut }
+        RequestIdFuture { request_id, fut }
     }
 }
