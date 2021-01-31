@@ -9,8 +9,8 @@ use chrono::Local;
 use hyper::{body, Method};
 use hyper::{Body, Request, Response, StatusCode, Uri};
 use hyper::service::Service;
-use log::{info, warn};
 use sha2::{Digest, Sha256};
+use slog::{info, warn};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 
 use crate::db::Database;
@@ -18,6 +18,7 @@ use crate::http::request_id::RequestIdMiddleware;
 use crate::http::ServiceResult;
 use crate::http::size_limit::SizeLimitService;
 use crate::id::generate::Generator;
+use crate::log::{self, LogContext};
 use crate::store::StoreBackend;
 
 type BoxError = Box<dyn Error + Send + Sync>;
@@ -151,15 +152,15 @@ impl<'a, S: StoreBackend> HandlerBuilder<'a, S> {
             .connect_with(connect_options)
             .await?;
 
-        info!("db pool is connected");
+        info!(log::get_logger(), "db pool is connected");
 
         let id_generator = Generator::new(&db_pool, ID_TYPE).await?;
 
-        info!("id generator is init");
+        info!(log::get_logger(), "id generator is init");
 
         let db = Database::new(&db_pool).await?;
 
-        info!("db is init");
+        info!(log::get_logger(), "db is init");
 
         Ok(Handler {
             store_backend: Arc::new(store_backend),
@@ -259,7 +260,7 @@ impl<S> Service<Request<Body>> for Handle<S>
 
             Box::pin(async move { handle.handle_head(req).await })
         } else {
-            warn!("illegal request {:?}", req);
+            warn!(log::get_logger(), "illegal request {:?}", req);
 
             let mut resp = Response::new(Body::empty());
             *resp.status_mut() = StatusCode::BAD_REQUEST;
@@ -281,6 +282,10 @@ impl<S> Handle<S>
             self.domain.as_str().to_owned()
         };
 
+        let log_cx = LogContext::builder()
+            .request_id(get_request_id(&req))
+            .build();
+
         let data = body::to_bytes(req.into_body()).await?;
 
         let mut hasher = Sha256::new();
@@ -288,24 +293,31 @@ impl<S> Handle<S>
 
         let hash_result = hex::encode(hasher.finalize());
 
-        let resource = if let Some(resource) = self.db.get_resource_by_hash(&hash_result).await? {
-            resource
-        } else {
-            let resource_id = self.id_generator.get_id().await?;
+        let resource =
+            if let Some(resource) = self.db.get_resource_by_hash(&hash_result, &log_cx).await? {
+                resource
+            } else {
+                let resource_id = self.id_generator.get_id(&log_cx).await?;
 
-            let bucket = Local::today().format("%Y-%m").to_string();
+                let bucket = Local::today().format("%Y-%m").to_string();
 
-            let resource = self
-                .db
-                .insert_resource(&bucket, &resource_id, &hash_result, data.len() as _)
-                .await?;
+                let resource = self
+                    .db
+                    .insert_resource(
+                        &bucket,
+                        &resource_id,
+                        &hash_result,
+                        data.len() as _,
+                        &log_cx,
+                    )
+                    .await?;
 
-            self.store_backend
-                .put(&bucket, &resource_id, data.as_ref())
-                .await?;
+                self.store_backend
+                    .put(&bucket, &resource_id, data.as_ref(), &log_cx)
+                    .await?;
 
-            resource
-        };
+                resource
+            };
 
         let resource_uri = Uri::builder()
             .scheme("https")
@@ -323,10 +335,14 @@ impl<S> Handle<S>
     }
 
     async fn handle_get(&self, req: Request<Body>) -> Result<Response<Body>, BoxError> {
+        let log_cx = LogContext::builder()
+            .request_id(get_request_id(&req))
+            .build();
+
         let path = req.uri().path().replace(GET_PATH, "");
         let resource_id = path.strip_prefix('/').unwrap_or(&path);
 
-        let resource = match self.db.get_resource_by_id(resource_id).await? {
+        let resource = match self.db.get_resource_by_id(resource_id, &log_cx).await? {
             None => {
                 return Ok(Response::builder()
                     .status(StatusCode::NOT_FOUND)
@@ -365,7 +381,13 @@ impl<S> Handle<S>
 
         let data = self
             .store_backend
-            .get(resource.get_bucket(), resource.get_id(), start, end)
+            .get(
+                resource.get_bucket(),
+                resource.get_id(),
+                start,
+                end,
+                &log_cx,
+            )
             .await?;
 
         let mut resp_builder = Response::builder();
@@ -388,10 +410,14 @@ impl<S> Handle<S>
     }
 
     async fn handle_head(&self, req: Request<Body>) -> Result<Response<Body>, BoxError> {
+        let log_cx = LogContext::builder()
+            .request_id(get_request_id(&req))
+            .build();
+
         let path = req.uri().path().replace(GET_PATH, "");
         let resource_id = path.strip_prefix('/').unwrap_or(&path);
 
-        let resource = match self.db.get_resource_by_id(resource_id).await? {
+        let resource = match self.db.get_resource_by_id(resource_id, &log_cx).await? {
             None => {
                 return Ok(Response::builder()
                     .status(StatusCode::NOT_FOUND)
@@ -487,6 +513,13 @@ impl<S> Handle<S>
             .body(Body::empty())
             .map_err(|err| err.into())
     }
+}
+
+fn get_request_id(req: &Request<Body>) -> &str {
+    req.headers()
+        .get("X-image-bed-request-id")
+        .map(|value| value.to_str().unwrap_or(""))
+        .unwrap_or("")
 }
 
 #[cfg(test)]

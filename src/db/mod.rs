@@ -3,8 +3,10 @@ use std::time::Duration;
 use std::time::SystemTime;
 
 use anyhow::Result;
-use log::error;
+use slog::error;
 use sqlx::{Error, PgPool};
+
+use crate::log::{self, LogContext};
 
 #[derive(Debug, sqlx::FromRow, Clone)]
 pub struct Resource {
@@ -54,6 +56,7 @@ impl Database {
         resource_id: &str,
         resource_hash: &str,
         resource_size: u64,
+        _log_cx: &LogContext,
     ) -> Result<Resource> {
         let now = SystemTime::now();
         let unix_timestamp = now.duration_since(SystemTime::UNIX_EPOCH)?.as_secs();
@@ -77,7 +80,11 @@ impl Database {
         })
     }
 
-    pub async fn get_resource_by_hash(&self, resource_hash: &str) -> Result<Option<Resource>> {
+    pub async fn get_resource_by_hash(
+        &self,
+        resource_hash: &str,
+        log_cx: &LogContext,
+    ) -> Result<Option<Resource>> {
         match sqlx::query_as::<_, Resource>("select * from resources where hash=$1 limit 1")
             .bind(resource_hash)
             .fetch_one(&self.db_pool)
@@ -87,7 +94,7 @@ impl Database {
                 if let Error::RowNotFound = &err {
                     Ok(None)
                 } else {
-                    error!("get resource by hash {} failed: {:?}", resource_hash, err);
+                    error!(log::get_logger(), "get resource by hash {} failed: {:?}", resource_hash, err; log_cx);
 
                     Err(err.into())
                 }
@@ -97,7 +104,11 @@ impl Database {
         }
     }
 
-    pub async fn get_resource_by_id(&self, resource_id: &str) -> Result<Option<Resource>> {
+    pub async fn get_resource_by_id(
+        &self,
+        resource_id: &str,
+        log_cx: &LogContext,
+    ) -> Result<Option<Resource>> {
         match sqlx::query_as::<_, Resource>("select * from resources where id=$1")
             .bind(resource_id)
             .fetch_one(&self.db_pool)
@@ -107,7 +118,7 @@ impl Database {
                 if let Error::RowNotFound = err {
                     Ok(None)
                 } else {
-                    error!("get resource by id {} failed: {:?}", resource_id, err);
+                    error!(log::get_logger(), "get resource by id {} failed: {:?}", resource_id, err; log_cx);
 
                     Err(err.into())
                 }
@@ -117,7 +128,11 @@ impl Database {
         }
     }
 
-    pub async fn update_resource_create_time(&self, resource_id: &str) -> Result<Option<()>> {
+    pub async fn update_resource_create_time(
+        &self,
+        resource_id: &str,
+        log_cx: &LogContext,
+    ) -> Result<Option<()>> {
         if let Err(err) = sqlx::query("update set resources (create_time) values ($1) where id=$2")
             .bind(SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?)
             .bind(resource_id)
@@ -128,8 +143,10 @@ impl Database {
                 Ok(None)
             } else {
                 error!(
+                    log::get_logger(),
                     "update resource {} create time failed: {:?}",
-                    resource_id, err
+                    resource_id, err;
+                    log_cx
                 );
 
                 Err(err.into())
@@ -142,6 +159,7 @@ impl Database {
     pub async fn delete_out_of_date_resources(
         &self,
         delete_before: &SystemTime,
+        log_cx: &LogContext,
     ) -> Result<Vec<Resource>> {
         let unix_timestamp = delete_before
             .duration_since(SystemTime::UNIX_EPOCH)?
@@ -165,8 +183,10 @@ impl Database {
                         break;
                     } else {
                         error!(
+                            log::get_logger(),
                             "query resources before {:?} failed: {:?}",
-                            delete_before, err
+                            delete_before, err;
+                            log_cx
                         );
 
                         return Err(err.into());
@@ -199,8 +219,10 @@ impl Database {
                 Ok(delete_resources)
             } else {
                 error!(
+                    log::get_logger(),
                     "delete resource info {:?} before {:?} failed: {:?}",
-                    delete_resources, delete_before, err
+                    delete_resources, delete_before, err;
+                    log_cx
                 );
 
                 Err(err.into())

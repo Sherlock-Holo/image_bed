@@ -2,9 +2,11 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use futures_util::lock::Mutex;
-use log::error;
 use md5::{Digest, Md5};
+use slog::error;
 use sqlx::PgPool;
+
+use crate::log::{self, LogContext};
 
 #[derive(Debug)]
 struct InnerGenerator {
@@ -38,7 +40,7 @@ impl Generator {
         })
     }
 
-    pub async fn get_id(&self) -> anyhow::Result<String> {
+    pub async fn get_id(&self, log_cx: &LogContext) -> anyhow::Result<String> {
         let mut inner = self.inner.lock().await;
 
         if let Some(id) = inner.id_list.pop_front() {
@@ -53,7 +55,7 @@ impl Generator {
             .fetch_one(&inner.db_pool)
             .await
             .map_err(|err| {
-                error!("get id value failed: {:?}", err);
+                error!(log::get_logger(), "get id value failed: {:?}", err; log_cx);
                 err
             })?;
 
@@ -97,6 +99,8 @@ mod tests {
 
         let generator = Generator::new(&pg_pool, &id_type).await.unwrap();
 
-        println!("id is {}", generator.get_id().await.unwrap());
+        let log_cx = LogContext::builder().request_id("").build();
+
+        println!("id is {}", generator.get_id(&log_cx).await.unwrap());
     }
 }

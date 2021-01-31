@@ -6,7 +6,6 @@ use bytes::{BufMut, Bytes, BytesMut};
 use futures_util::{AsyncReadExt, StreamExt};
 use futures_util::io::AsyncRead;
 use hyper::StatusCode;
-use log::error;
 use rusoto_core::{ByteStream, HttpClient, Region, RusotoError};
 use rusoto_core::credential::StaticProvider;
 use rusoto_s3::{
@@ -14,8 +13,10 @@ use rusoto_s3::{
     GetObjectRequest, HeadBucketRequest, HeadObjectRequest, ListObjectsRequest, ObjectIdentifier,
     PutObjectRequest, S3, S3Client, S3Error,
 };
+use slog::error;
 use thiserror::Error;
 
+use crate::log::{self, LogContext};
 use crate::store::StoreBackend;
 
 #[derive(Debug, Error)]
@@ -75,10 +76,11 @@ impl StoreBackend for CosBackend {
         bucket: &str,
         resource_id: &str,
         resource: R,
+        log_context: &LogContext,
     ) -> Result<(), Self::Error> {
         let real_bucket = self.get_real_bucket_name(bucket);
 
-        if !self.is_bucket_exist(&real_bucket).await? {
+        if !self.is_bucket_exist(&real_bucket, log_context).await? {
             self.client
                 .create_bucket(CreateBucketRequest {
                     acl: None,
@@ -94,7 +96,10 @@ impl StoreBackend for CosBackend {
                 .await?;
         }
 
-        if self.is_resource_exist(&real_bucket, resource_id).await? {
+        if self
+            .is_resource_exist(&real_bucket, resource_id, log_context)
+            .await?
+        {
             return Err(Error::ResourceExist(resource_id.to_owned()));
         }
 
@@ -148,6 +153,7 @@ impl StoreBackend for CosBackend {
         resource_id: &str,
         start: S,
         end: E,
+        log_context: &LogContext,
     ) -> Result<Bytes, Self::Error>
         where
             S: Into<Option<u64>> + Send,
@@ -158,11 +164,14 @@ impl StoreBackend for CosBackend {
         let start = start.into();
         let end = end.into();
 
-        if !self.is_bucket_exist(&real_bucket).await? {
+        if !self.is_bucket_exist(&real_bucket, log_context).await? {
             return Err(Error::BucketNotFound(bucket.to_owned()));
         }
 
-        if !self.is_resource_exist(&real_bucket, resource_id).await? {
+        if !self
+            .is_resource_exist(&real_bucket, resource_id, log_context)
+            .await?
+        {
             return Err(Error::ResourceNotFound(resource_id.to_owned()));
         }
 
@@ -214,10 +223,15 @@ impl StoreBackend for CosBackend {
         }
     }
 
-    async fn delete(&self, bucket: &str, resource_id: &str) -> Result<(), Self::Error> {
+    async fn delete(
+        &self,
+        bucket: &str,
+        resource_id: &str,
+        log_context: &LogContext,
+    ) -> Result<(), Self::Error> {
         let bucket = self.get_real_bucket_name(bucket);
 
-        if !self.is_bucket_exist(&bucket).await? {
+        if !self.is_bucket_exist(&bucket, log_context).await? {
             return Ok(());
         }
 
@@ -250,10 +264,15 @@ impl StoreBackend for CosBackend {
         }
     }
 
-    async fn delete_bucket(&self, bucket: &str, need_empty: bool) -> Result<(), Self::Error> {
+    async fn delete_bucket(
+        &self,
+        bucket: &str,
+        need_empty: bool,
+        log_context: &LogContext,
+    ) -> Result<(), Self::Error> {
         let real_bucket = self.get_real_bucket_name(bucket);
 
-        if !self.is_bucket_exist(&real_bucket).await? {
+        if !self.is_bucket_exist(&real_bucket, log_context).await? {
             return Ok(());
         }
 
@@ -337,7 +356,7 @@ impl StoreBackend for CosBackend {
             }
         }
 
-        self.delete_bucket(&real_bucket).await
+        self.delete_bucket(&real_bucket, log_context).await
     }
 }
 
@@ -359,7 +378,7 @@ impl CosBackend {
         }
     }
 
-    async fn is_bucket_exist(&self, bucket: &str) -> Result<bool, Error> {
+    async fn is_bucket_exist(&self, bucket: &str, log_cx: &LogContext) -> Result<bool, Error> {
         if let Err(err) = self
             .client
             .head_bucket(HeadBucketRequest {
@@ -374,7 +393,7 @@ impl CosBackend {
                         return Ok(false);
                     }
 
-                    error!("check bucket {} exist failed: {:?}", bucket, err);
+                    error!(log::get_logger(), "check bucket {} exist failed: {:?}", bucket, err; log_cx);
 
                     Err(err.into())
                 }
@@ -386,7 +405,12 @@ impl CosBackend {
         }
     }
 
-    async fn is_resource_exist(&self, bucket: &str, resource_id: &str) -> Result<bool, Error> {
+    async fn is_resource_exist(
+        &self,
+        bucket: &str,
+        resource_id: &str,
+        log_cx: &LogContext,
+    ) -> Result<bool, Error> {
         if let Err(err) = self
             .client
             .head_object(HeadObjectRequest {
@@ -410,8 +434,10 @@ impl CosBackend {
                 Ok(false)
             } else {
                 error!(
+                    log::get_logger(),
                     "check bucket {} resource {} exist failed: {:?}",
-                    bucket, resource_id, err
+                    bucket, resource_id, err;
+                    log_cx,
                 );
 
                 Err(err.into())
@@ -421,7 +447,7 @@ impl CosBackend {
         }
     }
 
-    async fn delete_bucket(&self, bucket: &str) -> Result<(), Error> {
+    async fn delete_bucket(&self, bucket: &str, log_cx: &LogContext) -> Result<(), Error> {
         if let Err(err) = self
             .client
             .delete_bucket(DeleteBucketRequest {
@@ -432,7 +458,7 @@ impl CosBackend {
             if is_service_err_or_not_found(&err) {
                 Ok(())
             } else {
-                error!("delete bucket {} failed: {:?}", bucket, err);
+                error!(log::get_logger(), "delete bucket {} failed: {:?}", bucket, err; log_cx);
 
                 Err(err.into())
             }
@@ -469,8 +495,10 @@ mod tests {
 
         let cos_backend = CosBackend::new(&access_key, &secret_key, &region, &app_id);
 
+        let log_context = LogContext::builder().request_id("").build();
+
         let data = cos_backend
-            .get("test-bucket", "test-resource-id", None, None)
+            .get("test-bucket", "test-resource-id", None, None, &log_context)
             .await
             .unwrap();
 
@@ -486,8 +514,10 @@ mod tests {
 
         let cos_backend = CosBackend::new(&access_key, &secret_key, &region, &app_id);
 
+        let log_context = LogContext::builder().request_id("").build();
+
         let data = cos_backend
-            .get("test-bucket", "test-resource-id", 1, None)
+            .get("test-bucket", "test-resource-id", 1, None, &log_context)
             .await
             .unwrap();
 
@@ -503,8 +533,10 @@ mod tests {
 
         let cos_backend = CosBackend::new(&access_key, &secret_key, &region, &app_id);
 
+        let log_context = LogContext::builder().request_id("").build();
+
         if let Err(err) = cos_backend
-            .get("test-bucket", "not-exist", None, None)
+            .get("test-bucket", "not-exist", None, None, &log_context)
             .await
         {
             if let Error::ResourceNotFound(res_id) = &err {
@@ -528,7 +560,12 @@ mod tests {
 
         let cos_backend = CosBackend::new(&access_key, &secret_key, &region, &app_id);
 
-        if let Err(err) = cos_backend.get("not-exist", "not-exist", None, None).await {
+        let log_context = LogContext::builder().request_id("").build();
+
+        if let Err(err) = cos_backend
+            .get("not-exist", "not-exist", None, None, &log_context)
+            .await
+        {
             if let Error::BucketNotFound(res_id) = &err {
                 if res_id == "not-exist" {
                     return;
@@ -550,8 +587,15 @@ mod tests {
 
         let cos_backend = CosBackend::new(&access_key, &secret_key, &region, &app_id);
 
+        let log_context = LogContext::builder().request_id("").build();
+
         if let Err(err) = cos_backend
-            .put("test-bucket", "test-resource-id", &[] as &[u8])
+            .put(
+                "test-bucket",
+                "test-resource-id",
+                &[] as &[u8],
+                &log_context,
+            )
             .await
         {
             if let Error::ResourceExist(res_id) = &err {
@@ -575,6 +619,8 @@ mod tests {
 
         let cos_backend = CosBackend::new(&access_key, &secret_key, &region, &app_id);
 
+        let log_context = LogContext::builder().request_id("").build();
+
         let random = rand::random::<u64>();
 
         cos_backend
@@ -582,6 +628,7 @@ mod tests {
                 "test-bucket",
                 &format!("test-resource-id-{}", random),
                 &[0u8, 1, 2, 3] as &[u8],
+                &log_context,
             )
             .await
             .unwrap();
@@ -596,16 +643,26 @@ mod tests {
 
         let cos_backend = CosBackend::new(&access_key, &secret_key, &region, &app_id);
 
+        let log_context = LogContext::builder().request_id("").build();
+
         let random = rand::random::<u64>();
 
         let res_id = format!("test-resource-id-{}", random);
 
         cos_backend
-            .put("test-bucket", &res_id, &[0u8, 1, 2, 3] as &[u8])
+            .put(
+                "test-bucket",
+                &res_id,
+                &[0u8, 1, 2, 3] as &[u8],
+                &log_context,
+            )
             .await
             .unwrap();
 
-        cos_backend.delete("test-bucket", &res_id).await.unwrap();
+        cos_backend
+            .delete("test-bucket", &res_id, &log_context)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -617,8 +674,10 @@ mod tests {
 
         let cos_backend = CosBackend::new(&access_key, &secret_key, &region, &app_id);
 
+        let log_context = LogContext::builder().request_id("").build();
+
         cos_backend
-            .delete("test-bucket", "not-exist")
+            .delete("test-bucket", "not-exist", &log_context)
             .await
             .unwrap();
     }
@@ -632,16 +691,23 @@ mod tests {
 
         let cos_backend = CosBackend::new(&access_key, &secret_key, &region, &app_id);
 
+        let log_context = LogContext::builder().request_id("").build();
+
         let random = rand::random::<u64>();
 
         let bucket = format!("test-bucket-{}", random);
 
         cos_backend
-            .put(&bucket, "test-resource", &[0u8, 1, 2, 3] as &[u8])
+            .put(
+                &bucket,
+                "test-resource",
+                &[0u8, 1, 2, 3] as &[u8],
+                &log_context,
+            )
             .await
             .unwrap();
 
-        StoreBackend::delete_bucket(&cos_backend, &bucket, false)
+        StoreBackend::delete_bucket(&cos_backend, &bucket, false, &log_context)
             .await
             .unwrap();
     }
@@ -655,17 +721,27 @@ mod tests {
 
         let cos_backend = CosBackend::new(&access_key, &secret_key, &region, &app_id);
 
+        let log_context = LogContext::builder().request_id("").build();
+
         let random = rand::random::<u64>();
 
         let bucket = format!("test-bucket-{}", random);
 
         cos_backend
-            .put(&bucket, "test-resource", &[0u8, 1, 2, 3] as &[u8])
+            .put(
+                &bucket,
+                "test-resource",
+                &[0u8, 1, 2, 3] as &[u8],
+                &log_context,
+            )
             .await
             .unwrap();
-        cos_backend.delete(&bucket, "test-resource").await.unwrap();
+        cos_backend
+            .delete(&bucket, "test-resource", &log_context)
+            .await
+            .unwrap();
 
-        StoreBackend::delete_bucket(&cos_backend, &bucket, true)
+        StoreBackend::delete_bucket(&cos_backend, &bucket, true, &log_context)
             .await
             .unwrap();
     }

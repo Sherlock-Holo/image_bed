@@ -4,8 +4,6 @@ use std::path::Path;
 use std::str::FromStr;
 
 use hyper::Server;
-use log::LevelFilter;
-use simple_logger::SimpleLogger;
 
 use crate::argument::Argument;
 use crate::config::Config;
@@ -17,18 +15,10 @@ mod config;
 mod db;
 mod http;
 mod id;
+mod log;
 mod store;
 
-fn init_log() {
-    SimpleLogger::new()
-        .with_level(LevelFilter::Info)
-        .init()
-        .unwrap()
-}
-
 pub async fn run() -> anyhow::Result<()> {
-    init_log();
-
     let argument = Argument::new();
 
     let config: Config = if argument.config == Path::new("-") {
