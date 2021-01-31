@@ -331,6 +331,8 @@ impl<S> Handle<S>
         headers.append("content-type", "text/plain".parse()?);
         headers.append("content-type", "charset=utf-8".parse()?);
 
+        info!(log::get_logger(), "upload success"; log_cx, "resource" => format!("{:?}", resource));
+
         Ok(resp)
     }
 
@@ -405,6 +407,8 @@ impl<S> Handle<S>
                 format!("bytes: {}-{}/{}", start, end, resource.get_resource_size()),
             );
         }
+
+        info!(log::get_logger(), "get success"; log_cx, "resource" => format!("{:?}", resource), "start" => start, "end" => end);
 
         Ok(resp_builder.body(Body::from(data))?)
     }
@@ -503,6 +507,8 @@ impl<S> Handle<S>
                 )
                 .header("content-length", format!("{}", total));
         }
+
+        info!(log::get_logger(), "head success"; log_cx, "resource" => format!("{:?}", resource), "start" => start, "end" => end);
 
         Ok(resp_builder.body(Body::empty())?)
     }
